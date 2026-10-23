@@ -21,6 +21,14 @@ const MAX_CHARS = 20000;          // the page prompt is about 9,000 characters
 const RATE = { windowMs: 10 * 60 * 1000, max: 30 }; // per visitor, per server instance
 const hits = new Map();
 
+// the key as pasted in the hosting settings may carry quotes, "Bearer ", "NAME=" or several copies on separate lines: use the first key
+function cleanKey(v) {
+  const parts = String(v || '').replace(/^\s*OPENROUTER_API_KEY\s*=/i, '').split(/[\s,;"'`]+/).filter(Boolean);
+  return parts.find(p => /^sk-or-[\w-]{20,}$/.test(p)) || parts.find(p => p.length >= 20 && !/^bearer$/i.test(p)) || '';
+}
+// error details never reach the browser; in the server log, anything that looks like a key is hidden
+const redact = s => String(s || '').replace(/sk-or-[\w-]+/g, 'sk-or-…').replace(/Bearer\s+\S+/gi, 'Bearer …').slice(0, 300);
+
 const send = (res, status, data) => {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -79,7 +87,7 @@ async function askModel(key, model, body) {
 }
 
 export default async function handler(req, res) {
-  const key = process.env.OPENROUTER_API_KEY;
+  const key = cleanKey(process.env.OPENROUTER_API_KEY);
   if (req.method === 'GET') return send(res, 200, { configured: !!key });
   if (req.method !== 'POST') return send(res, 405, { error: 'Use GET or POST.' });
   if (!key) return send(res, 503, { error: 'AI is not set up yet: add OPENROUTER_API_KEY to the server environment.' });
@@ -96,16 +104,15 @@ export default async function handler(req, res) {
 
   const names = Object.fromEntries(DEFAULT_MODELS);
   const models = (process.env.OPENROUTER_MODELS || DEFAULT_MODELS.map(m => m[0]).join(',')).split(',').map(s => s.trim()).filter(Boolean);
-  let last;
   for (const model of models.slice(0, MAX_TRIES)) {
     try {
       const out = await askModel(key, model, { system, user, temperature });
       return send(res, 200, { ...out, name: names[model] || model });
     } catch (e) {
-      last = e;
+      console.error(`AI model ${model} failed:`, e.status || '', redact(e.message));
       if (e.status === 401) return send(res, 500, { error: 'The OpenRouter key on the server was not accepted.' });
       if (e.daily) return send(res, 429, { error: "Today's free AI limit is used up (OpenRouter allows 50 free requests a day; adding $10 credit there raises it to 1,000). It resets at midnight UTC." });
     }
   }
-  return send(res, 502, { error: `No AI model answered right now. Please try again in a minute. (${last?.message || 'unknown error'})` });
+  return send(res, 502, { error: 'No AI model answered right now. Please try again in a minute.' });
 }
