@@ -158,6 +158,13 @@
     'Education': ['classroom', 'library books', 'students studying', 'school building'],
     'Technology': ['laptop', 'software developer', 'smartphone app', 'data center']
   };
+  // when the description gives no business name: placeholder text the owner clicks to change, and a top-banner title per page type
+  const NO_NAME = 'Your brand name';
+  const HERO_NO_NAME = {
+    'Company profile': 'Welcome to our company', 'Museum Art': 'Welcome to the museum', 'Tourism': 'Discover, explore, enjoy',
+    'Instructions': 'Easy step-by-step guide', 'Coupon': 'A special offer for you', 'Restaurant': 'Good food, warm welcome', 'Event': 'You are invited',
+    'Real estate': 'Find your new home', 'Healthcare': 'Caring for you and your family', 'Education': 'Learn something new with us', 'Technology': 'Simple tools that just work'
+  };
 
   // ---------- 10 designs per section; each also has 3 positions (left, center, right) = 30 looks ----------
   const NAV_DESIGNS = ['Simple white', 'White with button', 'Colour bar', 'Classic, lines above and below', 'Contact strip on top',
@@ -253,6 +260,194 @@
     return out.slice(0, 3);
   }
 
+  // ---------- what the user asked for: business name, colours, sections, phone and email ----------
+  // Read straight from the description, so the page follows the request even when a free AI model ignores it (and without AI).
+  const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+  const COLOUR_HEX = {
+    'navy blue': '#1f3a7a', 'royal blue': '#1d4ed8', 'sky blue': '#0284c7', 'light blue': '#0284c7', 'baby blue': '#0284c7', 'dark blue': '#1e3a8a',
+    'dark green': '#14532d', 'light green': '#16a34a', 'forest green': '#166534', 'hot pink': '#db2777', 'baby pink': '#db2777', 'dark red': '#991b1b',
+    red: '#d62828', crimson: '#b91c1c', scarlet: '#d62828', maroon: '#7f1d1d', burgundy: '#6d1f2f', wine: '#7b1e3a',
+    pink: '#db2777', rose: '#e11d48', magenta: '#c026d3', coral: '#e8590c', orange: '#ea580c', peach: '#f97316',
+    gold: '#b8860b', golden: '#b8860b', mustard: '#ca8a04', amber: '#d97706', yellow: '#eab308',
+    olive: '#556b2f', lime: '#65a30d', mint: '#10b981', emerald: '#047857', green: '#15803d',
+    teal: '#0f766e', turquoise: '#0e9aa7', cyan: '#0891b2', aqua: '#0891b2', navy: '#1f3a7a', blue: '#1d4ed8',
+    indigo: '#4338ca', purple: '#7e22ce', violet: '#7c3aed', lavender: '#8b5cf6', lilac: '#a855f7', plum: '#6b2150',
+    brown: '#7c4a2d', chocolate: '#5c3317', coffee: '#6f4e37', tan: '#a0785a', beige: '#c8ad7f', cream: '#f5ecd7',
+    black: '#161616', charcoal: '#2b2f36', grey: '#4b5563', gray: '#4b5563', silver: '#6b7280', white: '#ffffff'
+  };
+  const COLOUR_WORDS = Object.keys(COLOUR_HEX).sort((a, b) => b.length - a.length);
+  // also foods, plants or materials ("coffee shop", "olive oil"): only a colour when the words around it say so
+  const AMBIGUOUS = new Set(['wine', 'coffee', 'chocolate', 'olive', 'mint', 'lime', 'peach', 'plum', 'rose', 'gold', 'golden', 'silver', 'cream', 'tan', 'orange', 'coral', 'amber', 'mustard', 'emerald', 'charcoal', 'aqua', 'lilac', 'lavender']);
+  const LIGHT_BG = new Set(['white', 'cream', 'beige']);
+  const COLOUR_TALK = /\b(colou?rs?|colou?red|themes?|ui|palette|shades?|tones?|background|scheme|branding)\b/;  // anywhere in the phrase
+  const BEFORE_COLOUR = /\b(more|mostly|lots of|plenty of|full of|use|using|prefer|in|all|bright|dark|light|deep|pastel|soft)\s+(a\s+|the\s+)?$/;
+  const AFTER_COLOUR = /^[\s-]*(website|web ?page|page|site|look|design|style|ui|theme|themed|background|buttons?|text|header|accents?|colou?r(ed|s)?|tones?|shades?|palette|scheme|everywhere)\b/;
+  const NEGATED = /\b(no|not|without|avoid|don'?t|do not|never|except|instead of|rather than|other than)\b[^,;]*$/;
+  const JOINED = /^\s*(and|&|,|\/|or|with|plus)?\s*(and\s+)?$/;
+
+  function readColours(desc) {
+    const want = [], avoid = new Set();
+    for (const sentence of desc.split(/[.;!?\n]+/)) {
+      const low = sentence.toLowerCase(), found = [];
+      let rest = low;
+      for (const w of COLOUR_WORDS) {
+        const re = new RegExp(`\\b${w}\\b`, 'g');
+        for (let m; (m = re.exec(rest));) { found.push({ w, at: m.index, end: m.index + w.length }); rest = rest.slice(0, m.index) + ' '.repeat(w.length) + rest.slice(m.index + w.length); }
+      }
+      found.sort((a, b) => a.at - b.at);
+      for (const f of found) {
+        const before = low.slice(0, f.at), after = low.slice(f.end), phrase = low.slice(before.lastIndexOf(',') + 1, f.end + (after.indexOf(',') + 1 || after.length + 1));
+        f.name = /^[A-Z]/.test(sentence.slice(f.at)) && /\S/.test(before) && !/[,:]\s*$/.test(before); // "Red Sea Diving": part of a name
+        f.neg = NEGATED.test(before);
+        f.ok = !f.name && !f.neg && (COLOUR_TALK.test(phrase) || (AMBIGUOUS.has(f.w)
+          ? /\b(more|mostly|bright|dark|light|deep|pastel|soft)\s+$/.test(before) || /^[\s-]*(colou?r|theme|tones?|shades?|palette|accents?|background)\b/.test(after)
+          : BEFORE_COLOUR.test(before) || AFTER_COLOUR.test(after)));
+      }
+      // colours named together ("white and red", "red, white & gold") are one request
+      for (let pass = 0; pass < 2; pass++) for (let k = 0; k < found.length - 1; k++) {
+        const a = found[k], b = found[k + 1];
+        if (a.name || b.name || a.neg || b.neg || !JOINED.test(low.slice(a.end, b.at))) continue;
+        if (a.ok || b.ok || (!AMBIGUOUS.has(a.w) && !AMBIGUOUS.has(b.w))) a.ok = b.ok = true;
+      }
+      for (const f of found) if (f.neg) avoid.add(f.w); else if (f.ok) want.push(f.w);
+    }
+    const words = [...new Set(want)].filter(w => !avoid.has(w));
+    const main = words.filter(w => !LIGHT_BG.has(w)); // first named colour leads ("black and gold" is black with gold)
+    if (!main.length) return null;
+    const label = w => ({ golden: 'Gold', gray: 'Grey' }[w] || w.split(' ').map(cap).join(' '));
+    return { words, main: COLOUR_HEX[main[0]], mainLabel: label(main[0]), second: main[1] ? COLOUR_HEX[main[1]] : null, secondLabel: main[1] ? label(main[1]) : '',
+      cream: words.includes('cream') || words.includes('beige'), dark: ['black', 'charcoal', 'grey', 'gray', 'silver'].includes(main[0]) };
+  }
+
+  // 3 themes built from the asked colours: they differ in shade and background, never in the colour itself
+  function askedThemes(c) {
+    const m = c.main, bg = c.cream ? '#fffaf0' : '#ffffff', light = c.cream ? 'Cream' : 'White';
+    const t1 = { name: `${c.mainLabel} & ${c.secondLabel || light}`, primary: m, accent: c.second || m, secondary: tint(m, .86), bg, surface: tint(m, .94), text: '#1f1f1f' };
+    const t2 = c.second
+      ? { name: `${c.secondLabel} & ${c.mainLabel}`, primary: c.second, accent: m, secondary: tint(c.second, .86), bg, surface: tint(c.second, .94), text: '#1f1f1f' }
+      : { name: c.dark ? 'Charcoal' : `Deep ${c.mainLabel}`, primary: shade(m, c.dark ? 0 : .3), accent: m, secondary: tint(m, .82), bg, surface: '#f4f4f5', text: '#161616' };
+    const t3 = { name: c.dark ? 'Soft Grey' : `Soft ${c.mainLabel}`, primary: m, accent: c.second || shade(m, .15), secondary: tint(m, .82), bg: c.dark ? '#fafafa' : tint(m, .965), surface: tint(m, .9), text: '#1f1f1f' };
+    return [t1, t2, t3].map(t => ({ ...t, strong: true }));
+  }
+
+  // what people call a section → section types to use (the next one when the first is already on the page); null = not a content section
+  const SECTION_ASKS = [
+    [/\b(menu ?bar|top menu|nav(igation)?( ?bar| menu)?|navbar|header|footer|logo|hero( section)?|banner|book a table|reserve a table|table (booking|reservation)s?|schedule (an?|your) (appointment|visit|call|meeting))\b/, null],
+    [/\b(phone|contact|mobile|whatsapp) numbers?\b/, ['contact'], false],
+    [/\b(about us|about (the )?(company|business|founder|owner|artist|clinic|restaurant|school|shop|hotel|museum|brand)|our story|who we are|our history|company history|about (section|page|part)|about(?= ?(,|&|and\b|\.|$)))\b/, ['about']],
+    [/\b(how it works|step[- ]by[- ]step|steps|our process|how to (order|book|apply|join|buy|use|get started))\b/, ['steps']],
+    [/\b(opening (hours|times)|working hours|business hours|office hours|timings|hours)\b/, ['hours', 'table']],
+    [/\b(what (our )?(customers|clients|people|guests|patients|students) say|testimonials?|reviews?|ratings)\b/, ['reviews']],
+    [/\b(faqs?|questions and answers|common questions|questions|q ?& ?a|q and a)\b/, ['faq']],
+    [/\b(photo gallery|image gallery|picture gallery|gallery|galleries|photos|pictures|images|portfolio)\b/, ['gallery']],
+    [/\b(call to action|cta)\b/, ['cta']],
+    [/\b(meet (the|our) team|our team|team|staff|our people|doctors|teachers|trainers|speakers|instructors|chefs)\b/, ['team']],
+    [/\b(key numbers|numbers|statistics|stats|achievements|milestones|facts and figures)\b/, ['stats']],
+    [/\b(what we (offer|do)|why choose us|why us)\b/, ['features', 'steps']],
+    [/\b(price list|prices|pricing|packages|plans|rates|fees|tickets?|food menu|drinks menu|our menu|menu)\b/, ['prices', 'table']],
+    [/\b(coupons?|discounts?|promo codes?|promotions?|((eid|holiday|christmas|ramadan|diwali|easter|weekend|summer|winter|seasonal|festive|new year|special|weekly|monthly) )+offers?|offers? section|offers?(?= ?(,|&|and\b|\.|$))|deals|vouchers?|\d+ ?% ?off)\b/, ['offer']],
+    [/\b(holiday packages|holidays?|events?|festivals?|celebrations?|workshops?|exhibitions?|weddings?|concerts?|christmas|eid|ramadan|diwali|new year|easter|national day)\b/, ['event', 'table', 'features']],
+    [/\b(time ?tables?|schedules?|comparison|compare|specifications|specs|programme|program|itinerary|agenda|table)\b/, ['table']],
+    [/\b(features?|services|highlights|benefits|amenities|facilities|courses|treatments|products)\b/, ['features', 'steps']],
+    [/\b(product)\b/, ['product']],
+    [/\b(contact( us| details| info(rmation)?| form| section| page)?|get in touch|reach us|location|map|directions|find us)\b/, ['contact']],
+    [/\b(address)\b/, ['contact'], false]
+  ];
+  const LABEL_FIX = { faq: 'FAQ', faqs: 'FAQ', cta: 'Get started', 'call to action': 'Get started', stats: 'Numbers', specs: 'Specifications', 'q&a': 'Q&A', 'q & a': 'Q&A', 'q and a': 'Q&A', 'time table': 'Timetable', 'time tables': 'Timetables' };
+  function readSections(desc) {
+    const low = desc.toLowerCase().replace(/\s+/g, ' ');
+    let rest = low;
+    const hits = [];
+    SECTION_ASKS.forEach(([re, types, named = true], p) => {
+      const g = new RegExp(re.source, 'g');
+      for (let m; (m = g.exec(rest));) {
+        if (types) hits.push({ at: m.index, text: m[0], types, named, p });
+        rest = rest.slice(0, m.index) + ' '.repeat(m[0].length) + rest.slice(m.index + m[0].length);
+      }
+    });
+    hits.sort((a, b) => a.at - b.at);
+    // words of one kind side by side are one section ("Eid holiday" → one event)
+    for (let k = hits.length - 1; k > 0; k--) {
+      const a = hits[k - 1], b = hits[k];
+      if (a.p === b.p && /^ ?$/.test(low.slice(a.at + a.text.length, b.at))) { a.text = low.slice(a.at, b.at + b.text.length); hits.splice(k, 1); }
+    }
+    const out = [], skip = new Set(), said = new Set();
+    for (const h of hits) {
+      const clause = low.slice(0, h.at).split(/[.;!?\n]/).pop();
+      if (NEGATED.test(clause)) { skip.add(h.types[0]); continue; }
+      const word = h.text.replace(/s$/, '');
+      if (said.has(word)) continue; // the same word twice is one section
+      said.add(word);
+      const type = h.types.find(t => !out.some(o => o.type === t) && !skip.has(t));
+      if (!type) continue;
+      let label = h.text.replace(/ (section|page|part|area)$/, '');
+      label = /\d+ ?% ?off/.test(label) ? 'Offer' : LABEL_FIX[label] || (label.split(' ').length > 3 ? null : cap(label));
+      out.push({ type, label: h.named ? label : null, at: h.at });
+    }
+    // "only gallery and contact": nothing else is added
+    const only = out.some(o => o.label && /\bonly\b/.test(low.slice(Math.max(0, o.at - 30), o.at)));
+    return { sections: out.filter(o => !skip.has(o.type)).map(({ type, label }) => ({ type, label })), skip, only };
+  }
+
+  // the business name: said outright ("called Bella Napoli") or written in capitals ("Sunrise Dental Clinic in Sharjah")
+  const BIZ_WORDS = new Set('restaurant cafe café coffee bakery kitchen grill pizzeria bistro bar hotel resort clinic dental dentist hospital pharmacy medical salon spa barber gym fitness studio academy school college institute university museum gallery shop store boutique market mart supermarket garage motors travel travels tours agency consulting consultants solutions technologies tech labs lab systems group holdings company co ltd llc inc services center centre events realty properties estate estates homes builders construction foods food trading logistics media design designs printing photography law legal insurance bank finance club house'.split(' '));
+  const PLAIN_WORDS = new Set(('i we my our a an the please create make build generate design need want website webpage page landing site web this it hi hello hey can could would you give add use include ' +
+    'with for and ui ai qr html css open call email phone contact gallery about events event features services menu home team reviews faq pricing prices offer coupon hours holiday holidays sections section ' +
+    'family modern local small big best new luxury premium italian indian arabic arabian chinese japanese thai french mexican lebanese turkish american british english european asian international online digital kids pet car beauty fashion ' +
+    'monday tuesday wednesday thursday friday saturday sunday mon tue wed thu fri sat sun january february march april may june july august september october november december ' +
+    'eid christmas ramadan diwali easter halloween valentine').split(' '));
+  function readBrand(desc) {
+    const d = desc.replace(/\s+/g, ' ').trim();
+    const tidy = s => s.replace(/^(the|a|an)\s+/i, '').replace(/^["“'‘]+|["”'’.,:;!?-]+$/g, '').trim();
+    const usable = s => s && s.length <= 40 && s.split(' ').length <= 6 && !PLAIN_WORDS.has(s.toLowerCase()) && !COLOUR_HEX[s.toLowerCase()];
+    let m = d.match(/\b(?:called|named|name is|brand(?: name)? is|brand:|(?:company|business|shop|store|restaurant) name(?: is|:)?)\s*["“'‘]?([^"”'’.,;!?]{2,40}?)["”'’]?(?=$|[.,;!?]|\s(?:and|with|in|at|for|located|based|which|that|who|is|we|our|from)\b)/i);
+    if (m && usable(tidy(m[1]))) { const n = tidy(m[1]); return { name: n === n.toLowerCase() ? n.split(' ').map(cap).join(' ') : n, sure: true }; }
+    m = d.match(/["“]([^"”]{2,40})["”]/);
+    if (m && usable(tidy(m[1]))) return { name: tidy(m[1]), sure: true };
+    // runs of Capitalised words; a name usually starts the description or follows "for"/"at"/"by"
+    const words = d.split(' '), runs = [];
+    let cur = null;
+    const end = () => { if (cur) { while (cur.w.length && /^(of|the|and|&)$/i.test(cur.w[cur.w.length - 1])) cur.w.pop(); if (cur.w.length) runs.push(cur); } cur = null; };
+    words.forEach((raw, k) => {
+      const w = raw.replace(/^[("“'‘]+|[)"”'’.,:;!?]+$/g, '');
+      const capital = /^\p{Lu}/u.test(w) && !PLAIN_WORDS.has(w.toLowerCase());
+      if (capital) { if (!cur) cur = { at: k, w: [] }; cur.w.push(w); }
+      else if (cur && /^(of|the|and|&|de|la|el|al|le|du|da|di|van|von|bin)$/i.test(w)) cur.w.push(w);
+      else end();
+      if (cur && /[.,:;!?)"”]$/.test(raw)) end();
+    });
+    end();
+    const score = r => {
+      const lowW = r.w.map(w => w.toLowerCase()), prev = (words[r.at - 1] || '').toLowerCase(), next = (words[r.at + r.w.length] || '').toLowerCase();
+      if (/^(in|near|from|to|around|across|visit)$/.test(prev)) return 0; // a place
+      if (lowW.every(w => BIZ_WORDS.has(w) || PLAIN_WORDS.has(w) || COLOUR_HEX[w])) return 0; // "Dental Clinic" or "Red And White" is not a name
+      if (r.w.length > 1 && lowW.some(w => BIZ_WORDS.has(w))) return 3;
+      if (/^(for|called|named|by|at|of)$/.test(prev)) return 2;
+      if (r.at === 0 && (r.w.length > 1 || /[,:–-]$/.test(words[0]) || /^(is|are|–|-)$/.test(next))) return 2;
+      return 0;
+    };
+    const best = runs.map(r => ({ r, s: score(r) })).filter(x => x.s).sort((a, b) => b.s - a.s || a.r.at - b.r.at)[0];
+    return { name: best ? best.r.w.join(' ') : '', sure: false };
+  }
+
+  // what the business is, as photo search words (pages made without AI use these instead of the page type's photos)
+  const TOPICS = { bakery: 'bakery', bakeries: 'bakery', bread: 'bakery', cake: 'cake shop', cakes: 'cake shop', pastry: 'pastry', cafe: 'cafe', café: 'cafe', coffee: 'coffee shop',
+    pizza: 'pizza', pizzeria: 'pizza', burger: 'burger', burgers: 'burger', sushi: 'sushi', bbq: 'barbecue', grill: 'grill food', seafood: 'seafood', bar: 'bar interior', restaurant: 'restaurant interior',
+    hotel: 'hotel room', resort: 'beach resort', villa: 'villa pool', dentist: 'dentist', dental: 'dentist', clinic: 'medical clinic', hospital: 'hospital', pharmacy: 'pharmacy', doctor: 'doctor',
+    salon: 'hair salon', barber: 'barber shop', spa: 'spa massage', nails: 'nail salon', gym: 'gym', fitness: 'gym', yoga: 'yoga', school: 'school classroom', kindergarten: 'kindergarten', nursery: 'kindergarten',
+    academy: 'classroom', university: 'university campus', library: 'library books', museum: 'museum hall', boutique: 'clothing boutique', fashion: 'fashion clothing', jewellery: 'jewelry', jewelry: 'jewelry',
+    florist: 'flower shop', flowers: 'flowers bouquet', garage: 'car repair', car: 'car', cars: 'car', travel: 'travel destination', tours: 'tour group', diving: 'scuba diving', beach: 'beach',
+    wedding: 'wedding', photography: 'photographer camera', law: 'law office', lawyer: 'law office', construction: 'construction site', cleaning: 'cleaning service', laundry: 'laundry', pet: 'pets', vet: 'veterinarian',
+    software: 'software developer', app: 'smartphone app', farm: 'farm', supermarket: 'supermarket', grocery: 'grocery store', bookshop: 'bookshop', bookstore: 'bookshop', perfume: 'perfume', furniture: 'furniture showroom' };
+  const topicOf = desc => { const w = desc.toLowerCase().match(new RegExp(`\\b(${Object.keys(TOPICS).join('|')})\\b`)); return w ? TOPICS[w[1]] : ''; };
+
+  function readRequest(desc) {
+    const brand = readBrand(desc), secs = readSections(desc);
+    const email = (desc.match(/[\w.+-]+@[\w-]+\.[\w.-]*\w/) || [''])[0];
+    const phone = ((desc.match(/(?:\+|00)?\d[\d\s().-]{6,}\d/g) || []).find(p => p.replace(/\D/g, '').length >= 7 && !/^\d{4}\s*[-–]\s*\d{4}$/.test(p.trim())) || '').trim();
+    return { brand: brand.name, brandSure: brand.sure, colour: readColours(desc), ...secs, phone, email, topic: topicOf(desc) };
+  }
+
   // ---------- images: Openverse first, Wikimedia Commons as backup, then random photos ----------
   const imgCache = {};
   function fetchT(url, ms) {
@@ -332,11 +527,13 @@
       else if (good.length) { const g = good[k++ % good.length]; Object.assign(m, { src: g.src, credit: g.credit }); }
     }
   }
+  // logo box shown until the owner uploads a logo (white, so it shows on colour menu bars too)
+  const LOGO_PH = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="176" height="52" viewBox="0 0 176 52"><rect x="1.5" y="1.5" width="173" height="49" rx="10" fill="#fff" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 5"/><path d="M30 33V20m0 0-6 6m6-6 6 6M21 37h18" stroke="#475569" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><text x="50" y="32" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="700" fill="#475569">Your logo</text></svg>');
   const SILHOUETTE = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#e5e9ee"/><circle cx="150" cy="118" r="54" fill="#b7c0ca"/><path d="M52 300c8-62 50-96 98-96s90 34 98 96z" fill="#b7c0ca"/></svg>');
 
   // ---------- AI ----------
   const FIELDS = {
-    nav: '"logo":"business name","tagline","cta":"short button label","link"',
+    nav: '"logo":"the business name, same as title (or "")","tagline","cta":"short button label","link"',
     hero: '"badge":"optional short label above the title or empty","heading","sub","cta","link","cta2":"optional second button or empty","link2","imageQuery"',
     about: '"heading","text","stats":[{"num","label"}] (0-3; only real facts from the description, otherwise [])',
     features: '"heading","items":[{"icon":"one emoji","title","text"}] (3-6),"imageQuery"',
@@ -354,7 +551,7 @@
     faq: '"heading","items":[{"q","a"}] (2-6)',
     cta: '"heading","sub","cta","link","imageQuery"',
     contact: '"heading","text","phone","email","address","cta"',
-    footer: '"brand","tagline"'
+    footer: '"brand":"same as title (or "")","tagline"'
   };
   const AUDIENCE = `Audience and style:
 - Many readers are older people. Use plain, warm, everyday words and short sentences. No slang, no hype, no jargon, no ALL CAPS.
@@ -363,16 +560,19 @@
 
   function systemPrompt(ind) {
     const middle = [...INDUSTRIES[ind].types, 'cta'];
-    const types = ['nav', 'hero', ...middle, 'footer'];
+    const others = Object.keys(TYPEINFO).filter(t => !FIXED.has(t) && !middle.includes(t));
+    const types = ['nav', 'hero', ...middle, ...others, 'footer'];
     return `You design one-page websites that open when someone scans a QR code, usually on a phone.
 You do NOT write HTML. You choose from fixed building blocks and write the text. Reply with ONE JSON object only, no markdown.
 
 ${AUDIENCE}
 
 Page rules:
-- Order: "nav" first, "hero" second, then 1 to ${MAX_CONTENT - 1} content sections, "footer" last. No type twice.
-- Content section types for a "${ind}" page: ${middle.join(', ')}.
-- Choose what this visitor needs most; fewer, useful sections beat many. Add "contact" whenever a phone, email or address is given, as the last content section.
+- The user's requests come first: every section, colour, name and detail the description asks for must be on the page.
+- Order: "nav" first, "hero" second, then the content sections (usually 2 to ${MAX_CONTENT - 1}; more when the user asks for more), "footer" last. No type twice.
+- Content section types that suit a "${ind}" page best: ${middle.join(', ')}. Also available: ${others.join(', ')}.
+- A section the user asks for by a name that is not a type goes in the closest type, with the user's name as its heading and "menuLabel" (e.g. "holidays" → event, "our products" → features).
+- Besides what was asked for, add only what this visitor needs most. Add "contact" whenever a phone, email or address is given, as the last content section.
 - Use a "table" when information is naturally a grid: timetables, schedules, programmes, ticket or price comparisons, plan comparisons, specifications, parts lists, allergy guides. Keep cells short.
 - Every content section has "menuLabel" (1-2 words for the top menu) and "menu" (true to show it in the top menu; at most 5 sections true).
 - Every section has "design" (1-10) and "align" ("left", "center" or "right").
@@ -381,10 +581,13 @@ Page rules:
 - Optional "background": "colour" for at most one content section to give the page rhythm.
 - Page "corners" for photos: "square", "soft" or "round".
 - Page look: "font" for headings (${HEAD_FONTS.join(', ')}), "body" font (${BODY_FONTS.join(', ')}) and button "shape" (rounded, pill or square).
-- Give exactly 3 colour themes as "palettes" for the visitor to choose from. They must look clearly different from each other (each with a different main colour), and all suit this business; put the best fit first. Each: "name" (1-2 words, e.g. "Ocean Blue") and hex colours #rrggbb.
+- Give exactly 3 colour themes as "palettes" for the visitor to choose from; each: "name" (1-2 words, e.g. "Ocean Blue") and hex colours #rrggbb.
+  If the description asks for colours, build all 3 palettes from those colours (the main asked colour as "primary" in each; vary only the shade and background).
+  Otherwise they must look clearly different from each other (each with a different main colour), and all suit this business; put the best fit first.
   primary: dark enough for white text. secondary: a very light tint of primary. accent: button colour, white text readable on it. bg: white or ivory. surface: a light grey or cream. text: near-black. No neon.
 - Write in the same language as the description. Headings max 7 words, paragraphs max 35 words.
 - "imageQuery": 1-3 simple English words for a stock photo that clearly shows this business (e.g. "pizza oven", "dentist chair").
+- "title": the business or brand name exactly as the description gives it, or "" when it gives none (the owner will add a logo). Never a sentence, slogan or the page type.
 
 Fields per section type:
   ${types.map(t => `${t}: ${FIELDS[t]}`).join('\n  ')}
@@ -411,15 +614,30 @@ JSON shape:
     lastRun = { name: j.name || j.model, ms: j.ms || 0, tokens: j.tokens || 0 };
     return out;
   }
-  const callAI = (desc, ind) => chat(systemPrompt(ind), `Page type: ${ind}\nDescription: ${desc}`, 0.7);
+  // the requests read from the description, spelled out for the AI (the result is checked against them in normalize)
+  function askNotes(ask) {
+    const out = [ask.brandSure
+      ? `- Business name: "${ask.brand}". Use it as "title", the menu bar "logo" and the footer "brand".`
+      : `- Business name: use the exact name the description gives${ask.brand ? ` (it looks like "${ask.brand}")` : ''}. If it gives none, use "" for "title", "logo" and "brand"; the owner will upload a logo.`];
+    const named = ask.sections.filter(r => r.label);
+    if (named.length) out.push(`- Sections asked for. Include EVERY one, in this order, with this "menuLabel", and write each about what its label says: ${named.map(r => `${r.type} "${r.label}"`).join(', ')}.${ask.only ? ' Add no other content sections.' : ''}`);
+    if (ask.skip.size) out.push(`- Leave out these sections: ${[...ask.skip].join(', ')}.`);
+    if (ask.colour) out.push(`- Colours asked for: ${ask.colour.words.join(', ')}. All 3 palettes use them, with ${ask.colour.mainLabel.toLowerCase()} as "primary".`);
+    if (ask.phone) out.push(`- Phone: ${ask.phone}`);
+    if (ask.email) out.push(`- Email: ${ask.email}`);
+    return `\n\nFollow these requests from the description exactly:\n${out.join('\n')}`;
+  }
+  const callAI = (desc, ind) => chat(systemPrompt(ind), `Page type: ${ind}\nDescription: ${desc}${askNotes(readRequest(desc))}`, 0.7);
 
-  // AI not set up on the server: build from the industry's default order so the flow still works.
+  // AI not set up on the server: the sections asked for (filled up from the industry's usual ones) so the flow still works.
   function demoSpec(desc, ind) {
-    const title = desc.split(/[.,\n!]/)[0].trim().slice(0, 50) || ind;
-    const base = BASE_THEMES[hash(desc) % BASE_THEMES.length];
-    return { title, corners: ['square', 'soft', 'round'][rnd(3)], font: base.font, body: base.body, shape: base.shape,
+    const ask = readRequest(desc), base = BASE_THEMES[hash(desc) % BASE_THEMES.length];
+    const asked = ask.sections.map(r => r.type);
+    const mid = ask.only || asked.length >= 3 ? asked : [...asked, ...INDUSTRIES[ind].order.filter(t => !asked.includes(t) && !ask.skip.has(t))].slice(0, Math.max(3, asked.length));
+    return { title: ask.brand, corners: ['square', 'soft', 'round'][rnd(3)], font: base.font, body: base.body, shape: base.shape,
       palettes: distinctThemes([base]),
-      sections: ['nav', 'hero', ...INDUSTRIES[ind].order, 'footer'].map(t => ({ type: t, design: 1 + rnd(10), align: t === 'nav' ? 'left' : ['left', 'center'][rnd(2)] })) };
+      sections: ['nav', 'hero', ...mid, 'footer'].map(t => ({ type: t, design: 1 + rnd(10), align: t === 'nav' ? 'left' : ['left', 'center'][rnd(2)],
+        ...(ask.topic && t !== 'team' ? { imageQuery: ask.topic, imageQueries: t === 'gallery' ? Array(4).fill(ask.topic) : [] } : {}) })) };
   }
 
   function makeSection(s, name, ind, fromAI) {
@@ -433,7 +651,7 @@ JSON shape:
         const arr = given ? s[k].filter(o => o && typeof o === 'object') : def[k];
         const n = clamp(arr.length, lo, hi);
         c[k] = Array.from({ length: n }, (_, j) => { const d = def[k][j % def[k].length], o = {}; for (const kk in d) o[kk] = esc(arr[j]?.[kk] ?? d[kk]); return o; });
-      } else c[k] = esc(String(s[k] ?? def[k]).replace('{name}', name));
+      } else c[k] = esc(String(s[k] ?? def[k]).replace('{name}', name || (s.type === 'hero' ? HERO_NO_NAME[ind] || 'Welcome' : NO_NAME)));
     }
     if (s.type === 'table') {
       const cols = (Array.isArray(s.cols) && s.cols.length >= 2 ? s.cols : def.cols).slice(0, 5).map(v => esc(String(v ?? '')));
@@ -441,7 +659,7 @@ JSON shape:
       c.cols = cols;
       c.rows = rows.slice(0, 12).map(r => cols.map((_, j) => esc(String((Array.isArray(r) ? r[j] : Object.values(r || {})[j]) ?? ''))));
     }
-    if (s.type === 'footer') c.copy = esc(DEF.footer.copy.replace('{name}', name)); // always the current year
+    if (s.type === 'footer') c.copy = esc(DEF.footer.copy.replace('{name}', name || NO_NAME)); // always the current year
     if (!FIXED.has(s.type)) c.menuLabel = esc(String(s.menuLabel || idef.menuLabel || TYPEINFO[s.type].label || TYPEINFO[s.type].name).slice(0, 24));
     const qs = Array.isArray(s.imageQueries) ? s.imageQueries : [];
     const pics = PICS[ind] || PICS['Company profile'];
@@ -459,23 +677,67 @@ JSON shape:
     };
   }
 
+  // the AI's name for the business, if the description really gives it (not a sentence, slogan or the page type)
+  function nameFrom(ask, spec, desc) {
+    if (ask.brandSure) return ask.brand;
+    const ai = strip(spec.title || '').replace(/\s+/g, ' ').trim();
+    const flat = s => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    const known = new Set(flat(desc).split(' ')), own = flat(ai).split(' ').filter(w => !BIZ_WORDS.has(w) && !PLAIN_WORDS.has(w));
+    const real = ai && ai.split(' ').length <= 6 && own.length && own.every(w => known.has(w)) && !/website|landing|web ?page|business name|company name|your (brand|business|company)/i.test(ai);
+    return real ? ai : ask.brand;
+  }
+
+  // asked-for colours are used generously: colour menu bar and top banner, one or two colour bands, a deep footer
+  function boldColours(sections) {
+    const nav = sections[0], hero = sections[1], foot = sections[sections.length - 1], mid = sections.slice(2, -1);
+    if (![3, 8, 10].includes(nav.variant)) nav.variant = [3, 8, 10][rnd(3)];
+    if (![1, 5].includes(hero.variant)) hero.variant = [1, 5][rnd(2)];
+    if ([6, 7, 10].includes(foot.variant)) foot.variant = [1, 2, 3, 4, 8][rnd(5)];
+    const order = ['cta', 'stats', 'offer', 'reviews', 'features', 'steps', 'event', 'hours', 'about', 'faq', 'contact'];
+    let want = (mid.length >= 4 ? 2 : 1) - mid.filter(s => s.bg === 'colour').length;
+    // not right below the banner (already in colour), and never two colour bands in a row
+    for (const s of mid.slice(1).filter(s => order.includes(s.type)).sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type))) {
+      const j = mid.indexOf(s);
+      if (want > 0 && mid[j - 1]?.bg !== 'colour' && mid[j + 1]?.bg !== 'colour') { s.bg = 'colour'; want--; }
+    }
+  }
+
   function normalize(spec, desc, ind, fromAI) {
-    const name = strip(spec.title || ind).slice(0, 60);
-    const allowed = new Set([...INDUSTRIES[ind].types, ...Object.keys(TYPEINFO).filter(t => !FIXED.has(t))]), seen = new Set();
+    const ask = readRequest(desc);
+    const name = nameFrom(ask, spec, desc).slice(0, 60);
+    const seen = new Set();
     const secs = (Array.isArray(spec.sections) ? spec.sections : []).filter(s => s && TYPEINFO[s.type] && !seen.has(s.type) && seen.add(s.type));
-    const mid = secs.filter(s => !FIXED.has(s.type) && allowed.has(s.type)).slice(0, MAX_CONTENT - 1);
-    for (const t of INDUSTRIES[ind].order) if (mid.length < MIN_CONTENT - 1 && !mid.some(m => m.type === t)) mid.push({ type: t });
+    let mid = secs.filter(s => !FIXED.has(s.type) && !ask.skip.has(s.type));
+    // every section the user asked for is on the page, in the order they named them, under their own name for it
+    const asked = ask.sections.map(r => {
+      const s = mid.find(m => m.type === r.type) || { type: r.type, design: 1 + rnd(10), align: ['left', 'center'][rnd(2)] };
+      if (r.label) { s.menuLabel = r.label; s.menu = true; if (!fromAI || !strip(s.heading || '')) s.heading = r.label; }
+      return s;
+    });
+    if (asked.length) mid = [...asked.filter(s => s.type !== 'contact'), ...(ask.only ? [] : mid.filter(m => !asked.includes(m))), ...asked.filter(s => s.type === 'contact')];
+    if ((ask.phone || ask.email) && !mid.some(m => m.type === 'contact') && !ask.skip.has('contact')) mid.push({ type: 'contact' });
+    for (const t of INDUSTRIES[ind].order) if (mid.length < MIN_CONTENT - 1 && !mid.some(m => m.type === t) && !ask.skip.has(t)) mid.push({ type: t });
     const ci = mid.findIndex(m => m.type === 'contact');
     if (ci >= 0) mid.push(...mid.splice(ci, 1)); // contact reads best last, just before the footer
+    // too many sections: drop the ones nobody asked for, keeping contact
+    for (let j = mid.length - 1; mid.length > Math.max(MAX_CONTENT - 1, asked.length) && j >= 0; j--) if (!asked.includes(mid[j]) && mid[j].type !== 'contact') mid.splice(j, 1);
     const corners = RADIUS[spec.corners] !== undefined ? spec.corners : 'soft';
     const pick = t => secs.find(s => s.type === t) || { type: t };
     const sections = [pick('nav'), pick('hero'), ...mid, pick('footer')].map(s => makeSection({ radius: corners, ...s }, name, ind, fromAI));
-    // the menu bar and footer show the same phone and email as the contact section
+    const nav = sections[0], hero = sections[1], foot = sections[sections.length - 1];
+    // the business name, or a logo box to upload into when the description gives no name
+    nav.c.logo = esc(name || NO_NAME);
+    nav.c.logoImg = name ? '' : LOGO_PH;
+    foot.c.brand = esc(name || NO_NAME);
+    if (!name && (!strip(hero.c.heading) || strip(hero.c.heading).split(/\s+/).length > 10)) hero.c.heading = esc(HERO_NO_NAME[ind] || 'Welcome');
+    // phone and email exactly as the user wrote them; the menu bar and footer show the same as the contact section
     const contact = sections.find(s => s.type === 'contact');
-    if (contact) for (const s of sections.filter(s => s.type === 'nav' || s.type === 'footer')) { s.c.phone = contact.c.phone; s.c.email = contact.c.email; }
+    for (const s of [contact, nav, foot]) if (s) { if (ask.phone) s.c.phone = esc(ask.phone); if (ask.email) s.c.email = esc(ask.email); }
+    if (contact) for (const s of [nav, foot]) { s.c.phone = contact.c.phone; s.c.email = contact.c.email; }
     // 3 colour themes; the fonts and button shape are the same for all three
     let pals = (Array.isArray(spec.palettes) ? spec.palettes : Array.isArray(spec.themes) ? spec.themes : []).filter(validTheme).slice(0, 3);
     if (pals.length < 3) pals = distinctThemes(pals.length ? pals : [BASE_THEMES[hash(desc) % BASE_THEMES.length]]);
+    if (ask.colour) { pals = askedThemes(ask.colour); boldColours(sections); }
     const base = BASE_THEMES[hash(desc) % BASE_THEMES.length], first = (spec.palettes || spec.themes || [])[0] || {};
     const look = {
       font: [spec.font, first.font].find(f => HEAD_FONTS.includes(f)) || base.font,
@@ -1096,8 +1358,8 @@ JSON shape:
     },
 
     footer(i) {
-      const x = ctx(i), { s, c, a, P } = x, L = x.L, light = [5, 6, 9].includes(L);
-      const bg = light ? P.surface : shade(P.primary, .45), fg = light ? P.text : '#fff', muted = light ? 'rgba(0,0,0,.62)' : 'rgba(255,255,255,.75)';
+      const x = ctx(i), { s, c, a, P } = x, L = x.L, light = [5, 6, 9].includes(L), deep = shade(P.primary, P.strong ? .2 : .45);
+      const bg = light ? P.surface : deep, fg = light ? P.text : '#fff', muted = light ? 'rgba(0,0,0,.62)' : 'rgba(255,255,255,.75)';
       const brand = (size = 22, color = light ? P.primary : '#fff') => x.t('brand', 'div', `font-family:${HF()};font-weight:800;font-size:${size}px;color:${color}`);
       const tag = x.t('tagline', 'div', `font-size:16px;color:${muted};margin-top:4px`);
       const copy = x.t('copy', 'div', `font-size:14px;color:${muted}`);
@@ -1111,7 +1373,7 @@ JSON shape:
       const wrap = (html, extra = '') => `<footer class="qp-foot" data-sec="${i}" id="footer" style="background:${bg};color:${fg};padding:52px 20px;font-family:${BF()};font-size:16px;line-height:1.6;${light ? 'border-top:1px solid rgba(0,0,0,.08);' : ''}${extra}"><div style="max-width:1080px;margin:0 auto">${html}${credits}</div></footer>`;
       if (L === 8) { // tagline on an accent band, then a dark strip
         return `<footer class="qp-foot" data-sec="${i}" id="footer" style="font-family:${BF()};font-size:16px;line-height:1.6;color:#fff"><div style="background:${P.accent};padding:44px 20px;text-align:${a}"><div style="max-width:1080px;margin:0 auto">${x.t('tagline', 'div', `font-family:${HF()};font-size:30px;font-weight:800;line-height:1.3;color:#fff`)}</div></div>`
-          + `<div style="background:${shade(P.primary, .45)};padding:26px 20px"><div style="max-width:1080px;margin:0 auto;display:flex;flex-wrap:wrap;gap:12px 24px;justify-content:space-between;align-items:center">${brand(19, '#fff')}${links('row', 'center', '#fff')}${copy}</div><div style="max-width:1080px;margin:0 auto">${credits}</div></div></footer>`;
+          + `<div style="background:${deep};padding:26px 20px"><div style="max-width:1080px;margin:0 auto;display:flex;flex-wrap:wrap;gap:12px 24px;justify-content:space-between;align-items:center">${brand(19, '#fff')}${links('row', 'center', '#fff')}${copy}</div><div style="max-width:1080px;margin:0 auto">${credits}</div></div></footer>`;
       }
       const tel = strip(c.phone) ? telOf(c.phone) : '';
       const inner = [
@@ -1507,7 +1769,7 @@ html{scroll-behavior:smooth}
       $('#pbImg [data-img=right]').prop('disabled', n >= s.imgs.length - 1);
       $('#pbImg [data-img=del]').prop('disabled', s.imgs.length <= GALLERY.min);
     }
-    $('#pbImg [data-img=change] span').text(img.dataset.logo ? 'Change logo' : inGallery ? 'Change' : 'Change photo');
+    $('#pbImg [data-img=change] span').text(img.dataset.logo ? (img.getAttribute('src') === LOGO_PH ? 'Upload logo' : 'Change logo') : inGallery ? 'Change' : 'Change photo');
     const r = rel(img), $bar = $('#pbImg').css({ display: 'flex', left: 0 });
     $bar.css({ top: r.top + 8, left: r.left + Math.max(4, (r.width - $bar.outerWidth()) / 2) });
   }
@@ -1602,7 +1864,7 @@ html{scroll-behavior:smooth}
         if (v === 'add') { s.c.cols.push('New column'); s.c.rows.forEach(r => r.push('–')); }
         else { s.c.cols.pop(); s.c.rows.forEach(r => r.pop()); }
       }
-      if (what === 'logo' && v === 'remove') s.c.logoImg = '';
+      if (what === 'logo' && v === 'remove') { s.c.logoImg = ''; if (!strip(s.c.logo)) s.c.logo = NO_NAME; }
     });
   });
   $('#logoUp').on('change', async function () {
@@ -1799,12 +2061,14 @@ html{scroll-behavior:smooth}
       const st = normalize(spec, desc, ind, useAI);
       busy('Finding photos…');
       await fillImages(st.sections);
-      const prevTitle = state ? strip(state.title) : null;
+      // the title the page fills in: the business name, or the top banner's title when there is no name
+      const autoTitle = s => strip(s.title) || strip(s.sections[1]?.c.heading || '');
+      const prevTitle = state ? autoTitle(state) : null;
       state = st;
       closeDesign();
       // fill the title unless the user typed one themselves (a title the previous AI page set may be replaced)
       const cur = $('#title').val().trim();
-      if (!cur || $('#title').data('auto') || cur === prevTitle) $('#title').val(strip(state.title)).data('auto', true);
+      if (!cur || $('#title').data('auto') || cur === prevTitle) $('#title').val(autoTitle(state)).data('auto', true);
       paint(false);
       $('#aiModal').one('hidden.bs.modal', openThemes).modal('hide'); // then the 3 colour choices
       if (useAI && lastRun) toast(`✓ Made with ${lastRun.name} in ${Math.round(lastRun.ms / 1000)} s`);
