@@ -1,0 +1,10 @@
+{
+  "name": "tiher-builder",
+  "private": true,
+  "type": "module",
+  "description": "HTML QR code editor with AI page generation (sections, designs, colour themes)",
+  "scripts": {
+    "start": "node dev-server.js"
+  },
+  "engines": { "node": ">=18" }
+}

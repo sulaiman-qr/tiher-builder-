@@ -1,0 +1,7 @@
+node_modules/
+*.log
+
+# secrets: the OpenRouter key for the AI generation
+.env
+.env.local
+.env.*.local
