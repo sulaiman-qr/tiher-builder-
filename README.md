@@ -4,11 +4,12 @@ The HTML QR code editor with **AI generation**: pick the type of page, describe 
 
 ## Files
 
-- `index.html`: the editor (Summernote toolbar, preview, AI generation button)
-- `ai-builder.js`: AI generation, the section designs, colour themes, on-page editing
-- `templates.js`: "Select a template" and saving your own templates
+- `public/index.html`: the editor (Summernote toolbar, preview, AI generation button)
+- `public/ai-builder.js`: AI generation, the section designs, colour themes, on-page editing
+- `public/templates.js`: "Select a template" and saving your own templates
 - `api/ai.js`: server endpoint that calls OpenRouter, so the key never reaches the browser
 - `dev-server.js`: local server for testing
+- `vercel.json`: tells Vercel there is nothing to build; it serves `public/` and runs `api/ai.js`
 
 ## Run it on your computer
 
@@ -20,4 +21,4 @@ Without a key the AI generation button still works, but it builds a sample page.
 
 ## Host it on Vercel
 
-Import the repository in Vercel (no build command needed), then add `OPENROUTER_API_KEY` under Project → Settings → Environment Variables and redeploy.
+Import the repository in Vercel (`vercel.json` already sets "no build"), then add `OPENROUTER_API_KEY` under Project → Settings → Environment Variables and redeploy.

@@ -1,4 +1,4 @@
-// Local server for the editor: serves the files in this folder and /api/ai (the same handler Vercel runs).
+// Local server for the editor: serves the files in public/ and /api/ai (the same handler Vercel runs).
 // Put OPENROUTER_API_KEY in .env.local (see .env.example), then: npm start → http://127.0.0.1:5183
 import http from 'http';
 import fs from 'fs';
@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import aiHandler from './api/ai.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const pub = path.join(root, 'public');
 const port = Number(process.env.PORT) || 5183;
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
 
@@ -24,9 +25,9 @@ http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/api/ai') return aiHandler(req, res);
   const rel = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname);
-  const file = path.join(root, rel);
-  // only plain files inside this folder; never .env files or the git folder
-  if (!file.startsWith(root + path.sep) || rel.split('/').some(p => p.startsWith('.')) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+  const file = path.join(pub, rel);
+  // only plain files inside public/, as on Vercel
+  if (!file.startsWith(pub + path.sep) || rel.split('/').some(p => p.startsWith('.')) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     return res.end('Not found');
   }
