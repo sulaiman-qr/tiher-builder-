@@ -457,18 +457,32 @@
   // Only licences that allow business use and edits (CC0, public domain, CC BY, CC BY-SA). CC BY and BY-SA need the
   // photographer named, so those photos carry a credit that the footer prints.
   const credit = (by, licence) => /public domain|cc0|pdm|^pd/i.test(licence || '') ? null : { by: strip(by || '').slice(0, 60) || 'Unknown photographer', lic: licence };
+  // Old scans, postcards, prints and archive pictures look out of place on a business page, so they are skipped,
+  // judged by their title, tags, categories, description and date.
+  const PHOTO_SOURCES = 'flickr,wikimedia,stocksnap,wordpress,nappy,rawpixel,geographorguk,justtakeitfree,woc_tech'; // Openverse photo sites, not museum or archive collections
+  const OLD_WORDS = /post ?cards?|\bscan(ned|s)?\b|\barchiv(e|es|al)\b|\bhistoric(al)?\b|vintage|antique|engraving|etching|lithograph|woodcut|illustration|\bdrawings?\b|\bsketch(es)?\b|\bpaintings?\b|\bmaps?\b|diagram|newspaper|advertisement|\bstamps?\b|\bposters?\b|manuscript|magazine|\bnegatives?\b|glass plate|lantern slide|stereo(graph|view|card)|daguerreotype|photochrom|halftone|photomechanical|library of congress|national archives|black[- ]and[- ]white|\bb ?& ?w\b|monochrome|sepia|gr[ae]yscale|\b1[5-9]th[- ]century|\bPD[- ](US[- ](expired|no[- ]notice|not[- ]renewed)|old|1923|art|scan)|published before|clip ?art|screenshot|coat of arms/i;
+  function looksOld(text, date) {
+    if (OLD_WORDS.test(text)) return true;
+    return (`${text} ${date || ''}`.match(/\b1[6-9]\d\d\b/g) || []).some(y => +y < 1990); // a year before 1990 in the title, description or date taken
+  }
   async function openverse(q, n = 12) {
     try {
-      const j = await (await fetchT(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&page_size=${n}&mature=false&license_type=commercial,modification`, 6000)).json();
-      return (j.results || []).map(x => ({ src: x.url, thumb: x.thumbnail, wide: (x.width || 4) >= (x.height || 3),
-        credit: credit(x.creator, `CC ${String(x.license || '').toUpperCase()} ${x.license_version || ''}`.trim()) }));
+      const j = await (await fetchT(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&page_size=${Math.min(20, n + 8)}&mature=false&license_type=commercial,modification&source=${PHOTO_SOURCES}`, 6000)).json();
+      return (j.results || [])
+        .filter(x => !['illustration', 'digitized_artwork'].includes(x.category) && !looksOld(`${x.title || ''} ${(x.tags || []).map(t => t.name).join(' ')}`))
+        .slice(0, n).map(x => ({ src: x.url, thumb: x.thumbnail, wide: (x.width || 4) >= (x.height || 3),
+          credit: credit(x.creator, `CC ${String(x.license || '').toUpperCase()} ${x.license_version || ''}`.trim()) }));
     } catch (e) { return []; }
   }
   async function commonsSearch(query, n) {
     try {
-      const j = await (await fetchT(`https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrnamespace=6&gsrlimit=${n}&prop=imageinfo&iiprop=url|size|extmetadata&iiextmetadatafilter=Artist|LicenseShortName&iiurlwidth=960&format=json&origin=*`, 8000)).json();
+      const j = await (await fetchT(`https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrnamespace=6&gsrlimit=${n}&prop=imageinfo&iiprop=url|size|extmetadata&iiextmetadatafilter=Artist|LicenseShortName|Categories|DateTimeOriginal|ImageDescription|ObjectName&iiurlwidth=960&format=json&origin=*`, 8000)).json();
       return Object.values(j.query?.pages || {}).sort((a, b) => a.index - b.index)
-        .map(p => p.imageinfo?.[0]).filter(ii => ii?.thumburl)
+        .filter(p => {
+          const ii = p.imageinfo?.[0], m = ii?.extmetadata || {};
+          return ii?.thumburl && !looksOld([p.title, m.ObjectName?.value, m.Categories?.value, strip(m.ImageDescription?.value || '')].join(' '), strip(m.DateTimeOriginal?.value || ''));
+        })
+        .map(p => p.imageinfo[0])
         .map(ii => ({ src: ii.thumburl, wide: ii.width >= ii.height, credit: credit(ii.extmetadata?.Artist?.value, ii.extmetadata?.LicenseShortName?.value) }));
     } catch (e) { return []; }
   }
@@ -1978,6 +1992,11 @@ html{scroll-behavior:smooth}
     $('#imgGrid').html('<span class="text-muted">Searching…</span>');
     const list = await searchAll(q);
     $('#imgGrid').html(list.map(it => `<img src="${esc(it.thumb || it.src)}" data-full="${esc(it.src)}" data-thumb="${esc(it.thumb || '')}" data-credit="${esc(JSON.stringify(it.credit || null))}" loading="lazy" alt="">`).join(''));
+    // a thumbnail that fails falls back to the full photo; a photo that fails too is not offered
+    $('#imgGrid img').on('error', function () {
+      if (this.dataset.thumb && this.getAttribute('src') === this.dataset.thumb && this.dataset.full !== this.dataset.thumb) this.src = this.dataset.full;
+      else $(this).remove();
+    });
   }
   function openImgFor(el) {
     if (el.dataset.logo) return $('#logoUp').trigger('click');
