@@ -499,14 +499,13 @@
     const seen = new Set();
     return groups.flat().filter(x => !seen.has(x.src) && seen.add(x.src));
   }
-  const picsum = (q, n = 12) => Array.from({ length: n }, (_, i) => ({ src: `https://picsum.photos/seed/${encodeURIComponent(q)}-${i}/900/600`, wide: true }));
   const wideFirst = l => [...l.filter(x => x.wide), ...l.filter(x => !x.wide)]; // landscape photos fit the layouts best
-  function searchImages(q) { // cached promise, so parallel sections share one request
-    return imgCache[q] || (imgCache[q] = openverse(q).then(l => l.length ? l : commons(q)).then(l => l.length ? wideFirst(l) : picsum(q)));
+  function searchImages(q) { // cached promise, so parallel sections share one request; an empty answer (often no connection) is asked again next time
+    return imgCache[q] || (imgCache[q] = openverse(q).then(l => l.length ? l : commons(q)).then(l => { if (!l.length) delete imgCache[q]; return wideFirst(l); }));
   }
   async function searchAll(q) { // the photo picker shows both libraries
     const [a, b] = await Promise.all([openverse(q, 16), commons(q, 16)]);
-    return a.length + b.length ? wideFirst([...a, ...b]) : picsum(q, 16);
+    return wideFirst([...a, ...b]);
   }
   // 'ok', 'error' (broken link) or 'slow' (no answer in time; usually fine, just a busy connection)
   const loadState = (src, ms) => new Promise(res => {
@@ -514,8 +513,8 @@
     i.onload = () => { clearTimeout(t); res(i.naturalWidth > 50 ? 'ok' : 'error'); }; i.onerror = () => { clearTimeout(t); res('error'); }; i.src = src;
   });
   const canLoad = async (src, ms = 5000) => (await loadState(src, ms)) === 'ok';
-  async function pickImage(q, used) { // → { src, credit }
-    const list = (await searchImages(q)).filter(it => !used.has(it.src)).slice(0, 3); // best matches first
+  async function pickImage(q, used) { // → { src, credit }, or {} when no photo could be found or loaded
+    const list = (await searchImages(q)).filter(it => !used.has(it.src)).slice(0, 4); // best matches first
     let slow = null;
     for (const it of list) {
       used.add(it.src); // reserve now: other sections are picking in parallel
@@ -525,24 +524,28 @@
         if (r === 'slow' && !slow) slow = { src, credit: it.credit || null };
       }
     }
-    // a matching photo that is only slow beats a random one
-    return slow || { src: `https://picsum.photos/seed/${encodeURIComponent(q)}-${rnd(999)}/900/600`, credit: null };
+    return slow || {}; // a matching photo that is only slow is still better than none
   }
   async function fillImages(sections, used = new Set()) {
-    await Promise.all(sections.flatMap(s => s.imgs.map(async im => { if (!im.src) Object.assign(im, await pickImage(im.q, used)); })));
-    // where a search found nothing: people get a neutral silhouette, other photos reuse a matching
-    // photo from the same page rather than a random one
-    const random = src => src.includes('picsum.photos');
-    const good = sections.filter(s => s.type !== 'team').flatMap(s => s.imgs).filter(m => m.src && !random(m.src));
+    const fill = () => Promise.all(sections.flatMap(s => s.imgs.map(async im => { if (!im.src) Object.assign(im, await pickImage(im.q, used)); })));
+    await fill();
+    // a dropped connection often recovers in a moment: one more try for the photos still missing
+    if (sections.some(s => s.imgs.some(m => !m.src))) { await new Promise(r => setTimeout(r, 1500)); await fill(); }
+    // still nothing: people get a neutral silhouette, other photos reuse a photo from the same page,
+    // and with no photo at all an "Add a photo" box shows (never a broken image)
+    const good = sections.filter(s => s.type !== 'team').flatMap(s => s.imgs).filter(m => m.src);
     let k = 0;
     for (const s of sections) for (const m of s.imgs) {
-      if (!random(m.src)) continue;
+      if (m.src) continue;
       if (s.type === 'team') Object.assign(m, { src: SILHOUETTE, credit: null });
       else if (good.length) { const g = good[k++ % good.length]; Object.assign(m, { src: g.src, credit: g.credit }); }
+      else Object.assign(m, { src: PHOTO_PH, credit: null });
     }
   }
   // logo box shown until the owner uploads a logo (white, so it shows on colour menu bars too)
   const LOGO_PH = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="176" height="52" viewBox="0 0 176 52"><rect x="1.5" y="1.5" width="173" height="49" rx="10" fill="#fff" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 5"/><path d="M30 33V20m0 0-6 6m6-6 6 6M21 37h18" stroke="#475569" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><text x="50" y="32" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="700" fill="#475569">Your logo</text></svg>');
+  // photo box shown when no photo could be found or loaded; clicking it opens the photo picker like any photo
+  const PHOTO_PH = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="900" height="600" viewBox="0 0 900 600"><rect width="900" height="600" fill="#eef1f4"/><g fill="none" stroke="#9aa5b1" stroke-width="10" stroke-linejoin="round"><rect x="365" y="215" width="170" height="130" rx="14"/><path d="M380 330l45-50 35 35 25-22 35 37"/></g><circle cx="500" cy="248" r="13" fill="#9aa5b1"/><text x="450" y="400" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="700" fill="#64748b">Add a photo</text></svg>');
   const SILHOUETTE = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#e5e9ee"/><circle cx="150" cy="118" r="54" fill="#b7c0ca"/><path d="M52 300c8-62 50-96 98-96s90 34 98 96z" fill="#b7c0ca"/></svg>');
 
   // ---------- AI ----------
@@ -613,11 +616,13 @@ JSON shape:
 
   // AI runs on the server (api/ai.js), which holds the OpenRouter key; the browser only sends the prompt.
   let aiReady = null, lastRun = null; // lastRun: { name, ms, tokens } of the last answer
-  const aiAvailable = () => aiReady ??= fetch('/api/ai').then(r => r.ok ? r.json() : {}).then(j => !!j.configured).catch(() => false);
-  async function chat(system, user, temperature = 0.7) {
+  // true or false; null when the server could not be reached (not remembered, so the next try asks again)
+  const aiAvailable = () => aiReady ??= fetchT('/api/ai', 10000).then(r => r.json()).then(j => !!j.configured).catch(() => { aiReady = null; return null; });
+  const NO_SERVER = 'The server could not be reached. Please check your internet connection and try again.';
+  async function chat(system, user, temperature = 0.7, signal) {
     let r;
-    try { r = await fetch('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ system, user, temperature }) }); }
-    catch (e) { throw new Error('The AI could not be reached. Please check your internet connection and try again.'); }
+    try { r = await fetch('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ system, user, temperature }), signal }); }
+    catch (e) { if (e.name === 'AbortError') throw e; throw new Error('The AI could not be reached. Please check your internet connection and try again.'); }
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || `The AI did not answer (error ${r.status}). Please try again.`);
     // some free models wrap the JSON in "thinking" blocks or code fences
@@ -641,7 +646,7 @@ JSON shape:
     if (ask.email) out.push(`- Email: ${ask.email}`);
     return `\n\nFollow these requests from the description exactly:\n${out.join('\n')}`;
   }
-  const callAI = (desc, ind) => chat(systemPrompt(ind), `Page type: ${ind}\nDescription: ${desc}${askNotes(readRequest(desc))}`, 0.7);
+  const callAI = (desc, ind, signal) => chat(systemPrompt(ind), `Page type: ${ind}\nDescription: ${desc}${askNotes(readRequest(desc))}`, 0.7, signal);
 
   // AI not set up on the server: the sections asked for (filled up from the industry's usual ones) so the flow still works.
   function demoSpec(desc, ind) {
@@ -1521,6 +1526,10 @@ html{scroll-behavior:smooth}
     .pb-addcard small { color:#666; font-size:13px; line-height:1.4; display:block; }
     .pb-lk { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; }
     .pb-lk .pb-opt { text-align:center; padding:12px 8px; font-size:15px; }
+    #themeModal .tpl-content { padding:20px 24px 24px; }
+    #themeModal .tpl-close { top:12px; right:12px; width:38px; height:38px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; color:#6b7280; }
+    #themeModal .tpl-close:hover { background:#f1f3f5; color:#111; }
+    #themeModal .tpl-title { padding:0 44px; }
     .th-row { display:flex; gap:22px; overflow-x:auto; padding:4px 4px 16px; justify-content:center; flex-wrap:wrap; }
     .th-card { flex:none; width:280px; background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.22); border-radius:6px; overflow:hidden; display:flex; flex-direction:column; border:3px solid transparent; }
     .th-card.on { border-color:#3a8ee6; }
@@ -1934,7 +1943,8 @@ html{scroll-behavior:smooth}
 
   // ---------- rewrite one section with AI ----------
   async function rewrite(i, btn) {
-    if (!(await aiAvailable())) return alert('Rewrite needs the AI, which is not set up on this server yet.');
+    const ok = await aiAvailable();
+    if (!ok) return alert(ok === null ? NO_SERVER : 'Rewrite needs the AI, which is not set up on this server yet.');
     syncFromEditor();
     const s = state.sections[i], plain = {};
     for (const k in s.c) if (!['menuLabel', 'logoImg'].includes(k)) plain[k] = typeof s.c[k] === 'string' ? strip(s.c[k]) : JSON.parse(strip(JSON.stringify(s.c[k])));
@@ -1991,6 +2001,7 @@ html{scroll-behavior:smooth}
   async function showResults(q) {
     $('#imgGrid').html('<span class="text-muted">Searching…</span>');
     const list = await searchAll(q);
+    if (!list.length) return $('#imgGrid').html('<span class="text-muted">No photos found. Check your internet connection, or try other words.</span>');
     $('#imgGrid').html(list.map(it => `<img src="${esc(it.thumb || it.src)}" data-full="${esc(it.src)}" data-thumb="${esc(it.thumb || '')}" data-credit="${esc(JSON.stringify(it.credit || null))}" loading="lazy" alt="">`).join(''));
     // a thumbnail that fails falls back to the full photo; a photo that fails too is not offered
     $('#imgGrid img').on('error', function () {
@@ -2065,21 +2076,29 @@ html{scroll-behavior:smooth}
   });
 
   // ---------- generate ----------
+  let running = null; // the generation in progress; Cancel (or closing the popup) stops it
   async function generate(desc, ind) {
-    const $go = $('#aiGo').prop('disabled', true);
+    const $go = $('#aiGo').prop('disabled', true), run = running = new AbortController();
     const t0 = Date.now(), busy = text => $go.html(`<span class="spinner-border spinner-border-sm"></span> ${text}`);
     $('#aiErr').text('');
     try {
-      const useAI = await aiAvailable();
+      busy('Connecting…');
+      let useAI = await aiAvailable();
+      if (useAI === null) { await new Promise(r => setTimeout(r, 1500)); useAI = await aiAvailable(); } // a dropped connection often comes back
+      if (useAI === null) throw new Error(NO_SERVER); // never quietly make a sample page instead
+      if (run.signal.aborted) return;
       // free models take about a minute, so show that something is happening
       busy('Writing your page…');
       const tick = setInterval(() => busy(`Writing your page… ${Math.round((Date.now() - t0) / 1000)} s`), 1000);
       let spec;
-      try { spec = useAI ? await callAI(desc, ind) : demoSpec(desc, ind); }
+      try { spec = useAI ? await callAI(desc, ind, run.signal) : demoSpec(desc, ind); }
       finally { clearInterval(tick); }
+      if (run.signal.aborted) return;
       const st = normalize(spec, desc, ind, useAI);
       busy('Finding photos…');
       await fillImages(st.sections);
+      if (run.signal.aborted) return;
+      running = null; // done: closing the popup below must not cancel it
       // the title the page fills in: the business name, or the top banner's title when there is no name
       const autoTitle = s => strip(s.title) || strip(s.sections[1]?.c.heading || '');
       const prevTitle = state ? autoTitle(state) : null;
@@ -2092,11 +2111,13 @@ html{scroll-behavior:smooth}
       $('#aiModal').one('hidden.bs.modal', openThemes).modal('hide'); // then the 3 colour choices
       if (useAI && lastRun) toast(`✓ Made with ${lastRun.name} in ${Math.round(lastRun.ms / 1000)} s`);
     } catch (e) {
-      $('#aiErr').text(e.message || String(e));
+      if (!run.signal.aborted) $('#aiErr').text(e.message || String(e));
     } finally {
+      if (running === run) running = null;
       $go.prop('disabled', false).html('<i class="fas fa-robot"></i> Generate');
     }
   }
+  $('#aiModal').on('hide.bs.modal', () => { if (running) { running.abort(); running = null; } });
   function toast(msg) {
     const $t = $('<div>').text(msg).css({ position: 'fixed', left: 16, bottom: 16, zIndex: 2000, background: '#1f2937', color: '#fff', padding: '10px 16px', borderRadius: 8, fontSize: 14, fontFamily: 'Poppins,sans-serif', boxShadow: '0 6px 18px rgba(0,0,0,.25)' }).appendTo('body');
     setTimeout(() => $t.fadeOut(400, () => $t.remove()), 7000);
@@ -2105,7 +2126,7 @@ html{scroll-behavior:smooth}
     if (state) { $('#aiDesc').val(state.desc); if (INDUSTRIES[state.ind]) $('#aiCat').val(state.ind); }
     $('#aiErr').text('');
     $('#aiModal').modal('show');
-    $('#aiNote').toggle(!(await aiAvailable()));
+    $('#aiNote').toggle((await aiAvailable()) === false);
   }
   $('#aiGo').on('click', () => {
     const desc = $('#aiDesc').val().trim();
